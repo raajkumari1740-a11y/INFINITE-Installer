@@ -82,3 +82,118 @@ panel_menu() {
             read -rp "Press Enter to continue..."
 
         ;;
+
+        5)
+
+            clear
+
+            echo -e "${GREEN}Creating Panel Backup...${RESET}"
+
+            mkdir -p /var/backups/infinite
+
+            tar -czf /var/backups/infinite/panel-$(date +%F-%H%M).tar.gz \
+            /var/www/pterodactyl 2>/dev/null
+
+            echo
+            echo -e "${GREEN}Backup Completed Successfully.${RESET}"
+            echo
+
+            read -rp "Press Enter to continue..."
+
+        ;;
+
+
+        6)
+
+            clear
+
+            echo -e "${GREEN}Restore Panel Backup${RESET}"
+            echo
+
+            ls -lh /var/backups/infinite
+
+            echo
+
+            read -rp "Backup File Name : " BACKUP
+
+            tar -xzf /var/backups/infinite/$BACKUP -C /
+
+            echo
+            echo -e "${GREEN}Backup Restored Successfully.${RESET}"
+            echo
+
+            read -rp "Press Enter to continue..."
+
+        ;;
+
+
+        7)
+
+            clear
+
+            echo -e "${GREEN}Updating Panel...${RESET}"
+
+            bash <(curl -s https://pterodactyl-installer.se)
+
+            read -rp "Press Enter to continue..."
+
+        ;;
+
+
+        8)
+
+            clear
+
+            echo -e "${RED}WARNING!${RESET}"
+            echo "This will remove the Pterodactyl Panel."
+            echo
+
+            read -rp "Continue? (y/N): " CONFIRM
+
+            if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+
+                rm -rf /var/www/pterodactyl
+
+                echo
+                echo -e "${GREEN}Panel Removed Successfully.${RESET}"
+
+            else
+
+                echo
+                echo "Cancelled."
+
+            fi
+
+            echo
+
+            read -rp "Press Enter to continue..."
+
+        ;;
+
+
+        0)
+
+            exit 0
+
+        ;;
+
+
+        *)
+
+            echo
+            echo -e "${RED}Invalid Option!${RESET}"
+
+            sleep 1
+
+        ;;
+
+    esac
+
+}
+
+while true
+do
+
+    panel_menu
+
+done
