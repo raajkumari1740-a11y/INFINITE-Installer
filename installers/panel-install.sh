@@ -163,3 +163,47 @@ echo
 echo
 echo -e "${GREEN}Panel Files Installed Successfully.${RESET}"
 echo
+
+# ==========================================================
+# CONFIGURE DATABASE
+# ==========================================================
+
+echo
+echo -e "${YELLOW}Configuring Database...${RESET}"
+echo
+
+read -rp "Database Name      : " DB_NAME
+
+read -rp "Database User      : " DB_USER
+
+read -rsp "Database Password  : " DB_PASS
+
+echo
+
+mysql -u root <<EOF
+CREATE DATABASE IF NOT EXISTS ${DB_NAME};
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';
+GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'127.0.0.1';
+FLUSH PRIVILEGES;
+EOF
+
+echo
+echo -e "${GREEN}Database Configured Successfully.${RESET}"
+echo
+
+
+# ==========================================================
+# CONFIGURE PANEL
+# ==========================================================
+
+echo
+echo -e "${YELLOW}Configuring Panel...${RESET}"
+echo
+
+php artisan p:environment:setup \
+    --author="${EMAIL}" \
+    --url="https://${DOMAIN}" \
+    --timezone="${TIMEZONE}" \
+    --cache=redis \
+    --session=redis \
+    --queue
