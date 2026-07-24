@@ -1,178 +1,240 @@
 #!/usr/bin/env bash
-#
-# modules/panel.sh
-# "Panel Setup" menu for the Pterodactyl Panel / Wings / Blueprint stack.
-# Installation is delegated to installers/, while lifecycle operations
-# (backup, restore, update, remove) live here since they are specific
-# to how this project lays out the panel.
 
-# ---------------------------------------------------------------------------
-# Lifecycle operations
-# ---------------------------------------------------------------------------
+# ==========================================================
+# INFINITE VPS MANAGER - PANEL SETUP MODULE
+# ==========================================================
 
-panel_backup() {
-    if [[ ! -d "$PANEL_DIR" ]]; then
-        msg_error "Panel is not installed at $PANEL_DIR."
-        return
+set -o pipefail
+set -u
+
+# ==========================================================
+# COLORS
+# ==========================================================
+
+GREEN='\033[1;32m'
+WHITE='\033[1;37m'
+RED='\033[1;31m'
+YELLOW='\033[1;33m'
+CYAN='\033[1;36m'
+RESET='\033[0m'
+
+# ==========================================================
+# PATHS
+# ==========================================================
+
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INSTALLERS_DIR="$BASE_DIR/installers"
+LOG_DIR="$BASE_DIR/logs"
+LOG_FILE="$LOG_DIR/infinite.log"
+
+# ==========================================================
+# LOGGING
+# ==========================================================
+
+panel_log() {
+    local level="${1:-INFO}"
+    local message="${2:-}"
+    local timestamp
+
+    mkdir -p "$LOG_DIR" 2>/dev/null
+
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE" 2>/dev/null
+}
+
+# ==========================================================
+# HELPERS
+# ==========================================================
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+pause() {
+    echo
+    read -rp "Press Enter to continue..." _
+}
+
+# ==========================================================
+# SECURE INSTALLER RUNNER
+# ==========================================================
+
+run_installer() {
+    # $1 = script filename inside installers/, $2 = human readable action name
+    local script_file="$INSTALLERS_DIR/$1"
+    local action_name="$2"
+
+    if [ ! -f "$script_file" ]; then
+        echo
+        echo -e "${RED}Installer not found.${RESET}"
+        panel_log "ERROR" "$action_name failed: $1 not found in $INSTALLERS_DIR."
+        pause
+        return 1
     fi
 
-    mkdir -p "$BACKUP_DIR/panel"
-    local stamp
-    stamp=$(date '+%Y%m%d-%H%M%S')
-    local archive="$BACKUP_DIR/panel/panel-backup-$stamp.tar.gz"
+    if [ ! -r "$script_file" ]; then
+        echo
+        echo -e "${RED}Installer not found.${RESET}"
+        panel_log "ERROR" "$action_name failed: $1 is not readable."
+        pause
+        return 1
+    fi
 
-    msg_info "Backing up panel files to $archive..."
-    tar -czf "$archive" -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")"
-
-    if command_exists mysqldump && [[ -f "$PANEL_ENV_FILE" ]]; then
-        local db_name db_user db_pass
-        db_name=$(grep -E '^DB_DATABASE=' "$PANEL_ENV_FILE" | cut -d '=' -f2)
-        db_user=$(grep -E '^DB_USERNAME=' "$PANEL_ENV_FILE" | cut -d '=' -f2)
-        db_pass=$(grep -E '^DB_PASSWORD=' "$PANEL_ENV_FILE" | cut -d '=' -f2)
-
-        if [[ -n "$db_name" ]]; then
-            msg_info "Backing up panel database..."
-            MYSQL_PWD="$db_pass" mysqldump -u "$db_user" "$db_name" \
-                > "$BACKUP_DIR/panel/panel-db-$stamp.sql" 2>/dev/null \
-                && msg_success "Database backup saved." \
-                || msg_warn "Database backup failed; check credentials in $PANEL_ENV_FILE."
+    if have_cmd stat; then
+        local perms other_digit
+        perms=$(stat -c '%a' "$script_file" 2>/dev/null)
+        if [ -n "$perms" ]; then
+            other_digit="${perms: -1}"
+            case "$other_digit" in
+                2|3|6|7)
+                    echo
+                    echo -e "${RED}Error:${RESET} $1 has insecure permissions (world-writable). Refusing to execute."
+                    panel_log "ERROR" "$action_name refused: $1 is world-writable."
+                    pause
+                    return 1
+                ;;
+            esac
         fi
     fi
 
-    msg_success "Panel backup complete: $archive"
+    echo
+    echo -e "${CYAN}Running: $action_name${RESET}"
+    echo
+
+    bash "$script_file"
+    local exit_code=$?
+
+    if [ "$exit_code" -eq 0 ]; then
+        panel_log "INFO" "$action_name completed successfully."
+    else
+        echo
+        echo -e "${YELLOW}[!] $action_name exited with status $exit_code${RESET}"
+        panel_log "WARN" "$action_name exited with status $exit_code."
+    fi
+
+    pause
+    return 0
 }
 
-panel_restore() {
-    mkdir -p "$BACKUP_DIR/panel"
-    local backups=("$BACKUP_DIR"/panel/panel-backup-*.tar.gz)
+# ==========================================================
+# ACTION FUNCTIONS
+# ==========================================================
 
-    if [[ ! -e "${backups[0]}" ]]; then
-        msg_error "No panel backups found in $BACKUP_DIR/panel."
-        return
-    fi
+panel_install_dependencies() {
+    run_installer "install_dependencies.sh" "Install Dependencies"
+}
 
-    echo -e "${C_WHITE}Available backups:${C_RESET}"
-    local i=1
-    local file
-    for file in "${backups[@]}"; do
-        echo "  [$i] $(basename "$file")"
-        ((i++))
-    done
+panel_install_panel() {
+    run_installer "install_panel.sh" "Install Pterodactyl Panel"
+}
 
-    read -r -p "Select backup number to restore: " index
-    local selected="${backups[$((index - 1))]}"
+panel_install_wings() {
+    run_installer "install_wings.sh" "Install Wings"
+}
 
-    if [[ -z "$selected" || ! -f "$selected" ]]; then
-        msg_error "Invalid selection."
-        return
-    fi
-
-    if ! confirm_action "This will overwrite $PANEL_DIR. Continue?"; then
-        msg_warn "Restore cancelled."
-        return
-    fi
-
-    systemctl stop nginx 2>/dev/null
-    rm -rf "$PANEL_DIR"
-    mkdir -p "$PANEL_DIR"
-    tar -xzf "$selected" -C "$(dirname "$PANEL_DIR")"
-    systemctl start nginx 2>/dev/null
-
-    msg_success "Panel restored from $(basename "$selected")."
+panel_install_blueprint() {
+    run_installer "install_blueprint.sh" "Install Blueprint"
 }
 
 panel_update() {
-    if [[ ! -d "$PANEL_DIR" ]]; then
-        msg_error "Panel is not installed."
-        return
-    fi
+    run_installer "update_panel.sh" "Update Panel"
+}
 
-    msg_info "Updating Pterodactyl Panel..."
-    cd "$PANEL_DIR" || return 1
-
-    php artisan down 2>/dev/null
-
-    curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-    tar -xzf panel.tar.gz
-    rm -f panel.tar.gz
-
-    chmod -R 755 storage/* bootstrap/cache
-
-    composer install --no-dev --optimize-autoloader --no-interaction
-
-    php artisan migrate --seed --force
-    php artisan view:clear
-    php artisan config:clear
-
-    chown -R www-data:www-data "$PANEL_DIR"
-
-    php artisan up 2>/dev/null
-
-    msg_success "Panel updated successfully."
+panel_backup() {
+    run_installer "backup_panel.sh" "Backup Panel"
 }
 
 panel_remove() {
-    if ! confirm_action "This will PERMANENTLY remove the panel, its database and nginx config. Continue?"; then
-        msg_warn "Removal cancelled."
-        return
-    fi
-
-    systemctl stop nginx 2>/dev/null
-    systemctl disable --now pteroq.service 2>/dev/null
-
-    rm -rf "$PANEL_DIR"
-    rm -f /etc/nginx/sites-enabled/pterodactyl.conf
-    rm -f /etc/nginx/sites-available/pterodactyl.conf
-    rm -f /etc/systemd/system/pteroq.service
-
-    systemctl daemon-reload
-    systemctl restart nginx 2>/dev/null
-
-    msg_success "Panel removed. The MySQL database was left intact; drop it manually if desired."
+    run_installer "remove_panel.sh" "Remove Panel"
 }
 
-# ---------------------------------------------------------------------------
-# Menu
-# ---------------------------------------------------------------------------
+# ==========================================================
+# MENU HEADER
+# ==========================================================
+
+panel_setup_header() {
+    clear
+    echo -e "${GREEN}"
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║                       PANEL SETUP                             ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo -e "${RESET}"
+}
+
+# ==========================================================
+# MAIN MENU FUNCTION
+# ==========================================================
 
 panel_setup_menu() {
-    while true; do
-        clear
-        print_header "PANEL SETUP"
-        print_menu_item "1" "Install Pterodactyl Panel"
-        print_menu_item "2" "Install Wings"
-        print_menu_item "3" "Reinstall Panel"
-        print_menu_item "4" "Install Blueprint"
-        print_menu_item "5" "Backup"
-        print_menu_item "6" "Restore"
-        print_menu_item "7" "Update"
-        print_menu_item "8" "Remove"
-        print_menu_item "0" "Back to Main Menu"
-        print_line "-"
 
-        read -r -p "$(echo -e "${C_GREEN}Select an option: ${C_RESET}")" choice
+    if [ ! -d "$INSTALLERS_DIR" ]; then
+        mkdir -p "$INSTALLERS_DIR" 2>/dev/null
+    fi
+
+    while true; do
+
+        panel_setup_header
+
+        echo -e "${GREEN}[1]${RESET} Install Dependencies"
+        echo -e "${GREEN}[2]${RESET} Install Pterodactyl Panel"
+        echo -e "${GREEN}[3]${RESET} Install Wings"
+        echo -e "${GREEN}[4]${RESET} Install Blueprint"
+        echo -e "${GREEN}[5]${RESET} Update Panel"
+        echo -e "${GREEN}[6]${RESET} Backup Panel"
+        echo -e "${GREEN}[7]${RESET} Remove Panel"
+
+        echo
+        echo -e "${RED}[0]${RESET} Back to Main Menu"
         echo
 
-        case "$choice" in
-            1) bash "$INSTALLERS_DIR/panel-install.sh" ;;
-            2) bash "$INSTALLERS_DIR/wings-install.sh" ;;
+        read -rp "Select Option : " PANEL_OPTION
+
+        case "$PANEL_OPTION" in
+
+            1)
+                panel_install_dependencies
+            ;;
+
+            2)
+                panel_install_panel
+            ;;
+
             3)
-                if confirm_action "This will remove and reinstall the panel. Continue?"; then
-                    panel_remove
-                    bash "$INSTALLERS_DIR/panel-install.sh"
-                fi
-                ;;
-            4) bash "$INSTALLERS_DIR/blueprint-install.sh" ;;
-            5) panel_backup ;;
-            6) panel_restore ;;
-            7) panel_update ;;
-            8) panel_remove ;;
-            0) return ;;
-            *) msg_error "Invalid option." ;;
+                panel_install_wings
+            ;;
+
+            4)
+                panel_install_blueprint
+            ;;
+
+            5)
+                panel_update
+            ;;
+
+            6)
+                panel_backup
+            ;;
+
+            7)
+                panel_remove
+            ;;
+
+            0)
+                panel_log "INFO" "Returning to main menu from Panel Setup."
+                return 0
+            ;;
+
+            *)
+                echo
+                echo -e "${RED}Invalid option!${RESET}"
+                panel_log "WARN" "Invalid Panel Setup option selected: $PANEL_OPTION"
+                sleep 1
+            ;;
+
         esac
 
-        press_enter_to_continue
     done
+
 }
 
 panel_setup_menu
