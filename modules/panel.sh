@@ -174,3 +174,5 @@ panel_setup_menu() {
         press_enter_to_continue
     done
 }
+
+panel_setup_menu
